@@ -16,9 +16,12 @@ public class SocketClientUsage {
         int port = 12345;
         Client client = new SocketClient(host, port);
 //        client.get("zsy1");
-        client.set("zsy12","for test");
-        client.get("zsy12");
-        client.rm("zsy12");
-        client.get("zsy12");
+        client.set("key1","value1");
+        client.set("key2","value2");
+        client.set("key3","value3");
+
+//        client.get("zsy12");
+//        client.rm("zsy12");
+//        client.get("zsy12");
     }
 }
