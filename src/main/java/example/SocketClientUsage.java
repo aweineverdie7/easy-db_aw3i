@@ -20,7 +20,7 @@ public class SocketClientUsage {
         client.set("key2","value2");
         client.set("key3","value3");
 
-//        client.get("zsy12");
+        client.get("keysa3");
 //        client.rm("zsy12");
 //        client.get("zsy12");
     }
