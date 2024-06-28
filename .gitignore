@@ -5,6 +5,8 @@
 *.so
 *.dylib
 *.idea
+data
+large_data_test
 target/*
 # Test binary, built with `go test -c`
 *.test
