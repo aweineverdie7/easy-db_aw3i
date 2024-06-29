@@ -9,7 +9,6 @@ package service;
 
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONObject;
-import controller.SocketServerHandler;
 import model.command.Command;
 import model.command.CommandPos;
 import model.command.RmCommand;
@@ -17,18 +16,25 @@ import model.command.SetCommand;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import utils.CommandUtil;
+import utils.CompressionUtils;
 import utils.LoggerUtil;
 import utils.RandomAccessFileUtil;
 
-import java.io.File;
-import java.io.IOException;
-import java.io.RandomAccessFile;
+import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.TreeMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.jar.JarEntry;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class NormalStore implements Store {
 
@@ -67,11 +73,15 @@ public class NormalStore implements Store {
     /**
      * 持久化阈值
      */
-    private final int storeThreshold = 3;
+    private final int storeThreshold = 1000;
+    private static final long FILE_SIZE_THRESHOLD = 1024 * 1024 * 10; // 10MB
 
+    private int rotateIndex = 0; // 用于rotate文件的序号
+    private final Lock rotateLock; // 新增的旋转锁
     public NormalStore(String dataDir) {
         this.dataDir = dataDir;
         this.indexLock = new ReentrantReadWriteLock();
+        this.rotateLock = new ReentrantLock(); // 初始化旋转锁
         this.memTable = new TreeMap<String, Command>();
         this.index = new HashMap<>();
 
@@ -106,6 +116,7 @@ public class NormalStore implements Store {
         try {
             // 打开文件以进行随机访问读写。
             RandomAccessFile file = new RandomAccessFile(this.genFilePath(), RW_MODE);
+            this.writerReader = file;
             // 获取文件长度，用于后续循环读取文件。
             long len = file.length();
             long start = 0;
@@ -141,6 +152,109 @@ public class NormalStore implements Store {
         LoggerUtil.debug(LOGGER, logFormat, "reload index: "+index.toString());
     }
 
+    // 生成带时间戳和序号的文件路径
+    private String generateRotatedFilePath() {
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
+        String timestamp = LocalDateTime.now().format(formatter);
+        return dataDir + File.separator + NAME  + "_" + timestamp + "_" + rotateIndex+ TABLE;
+    }
+
+    /**
+     * 检查当前文件的大小，如果达到指定的阈值，则进行文件轮转。
+     * 文件轮转通常是为了避免单个文件过大，导致处理效率下降或管理困难。
+     * 此方法通过同步关键字确保在多线程环境下的安全性，避免多个线程同时尝试轮转文件导致的竞争条件。
+     *
+     * @throws IOException 如果在检查文件大小或执行文件轮转过程中发生I/O错误。
+     */
+    // 检查并执行rotate操作
+    private synchronized void checkAndRotateIfNeeded() throws IOException {
+        // 检查当前文件的大小是否达到轮转的阈值
+        if (this.writerReader.length() >= FILE_SIZE_THRESHOLD) {
+            // 如果达到阈值，则执行文件轮转操作
+            rotateFile();
+        }
+    }
+
+/**
+ * 加载旋转过的文件，这些文件包含历史命令数据。
+ * 该方法用于将这些历史命令数据读入内存，以便可以快速访问和执行。
+ */
+private void loadRotatedFiles() {
+    // 创建一个File对象，指向存储数据的目录
+    File dir = new File(dataDir);
+    // 列出所有符合命名规则的文件，即以NAME+ "_" 开头，以 TABLE 结尾，但不等于当前正在使用的文件名
+    File[] files = dir.listFiles((d, name) -> name.startsWith(NAME + "_") && name.endsWith(TABLE) && !name.equals(NAME + TABLE));
+    // 遍历文件数组
+    if (files != null) {
+        for (File rotatedFile : files) {
+            try (RandomAccessFile raf = new RandomAccessFile(rotatedFile.getAbsolutePath(), "r")) {
+                // 获取文件长度
+                long len = raf.length();
+                // 从文件开始位置读取
+                long start = 0;
+                // 当当前读取位置小于文件长度时，继续读取
+                while (start < len) {
+                    // 读取命令的长度
+                    int cmdLen = raf.readInt();
+                    // 根据命令长度创建一个字节数组
+                    byte[] bytes = new byte[cmdLen];
+                    // 读取命令的全部字节
+                    raf.readFully(bytes);
+                    // 将字节数组转换为字符串
+                    String jsonString = new String(bytes, StandardCharsets.UTF_8);
+                    // 将字符串解析为JSONObject
+                    JSONObject jsonObject = JSON.parseObject(jsonString);
+                    // 将JSONObject转换为Command对象
+                    Command command = CommandUtil.jsonToCommand(jsonObject);
+                    // 如果命令对象不为空，则将其索引添加到index中
+                    if (command != null) {
+                        // 创建CommandPos对象，记录命令在文件中的位置和长度
+                        CommandPos cmdPos = new CommandPos((int) start, cmdLen);
+                        // 将命令的键和CommandPos对象添加到index中
+                        index.put(command.getKey(), cmdPos);
+                    }
+                    // 更新当前读取位置，为下一个命令做准备
+                    start += 4 + cmdLen;
+                }
+            } catch (IOException e) {
+                // 如果在读取文件时发生IO异常，则记录错误日志
+                LOGGER.error("Error loading rotated file: {}", rotatedFile.getName(), e);
+            }
+        }
+    }
+}
+
+
+    /**
+     * 执行日志文件的滚动操作。
+     * 当需要滚动日志文件时，此方法将当前正在写入的日志文件重命名并压缩，然后创建一个新的日志文件以继续写入。
+     * 这个方法使用了一个互斥锁来确保在滚动操作期间不会有其他线程尝试写入日志文件，从而保证了操作的原子性。
+     *
+     * @throws IOException 如果在移动文件或创建新文件时发生I/O错误。
+     */
+    // 执行rotate操作
+    private void rotateFile() throws IOException {
+            //关闭流
+        if (this.writerReader != null) {
+            this.writerReader.close();
+        }
+        //开锁
+        rotateLock.lock();
+        // 生成滚动后的文件路径。
+        String rotatedFilePath = generateRotatedFilePath();
+        // 将当前的日志文件移动到滚动后的路径，实质上是进行了重命名。
+        Files.move(Paths.get(genFilePath()), Paths.get(rotatedFilePath));
+        // 创建一个新的RandomAccessFile实例，用于写入新的日志文件。
+        this.writerReader = new RandomAccessFile(genFilePath(), RW_MODE);
+        // 增加滚动索引，用于区分不同的滚动版本。
+        rotateIndex++;
+        // 异步压缩滚动后的日志文件，以减少滚动操作对当前写入操作的影响。
+        CompressionUtils.compressFileAsync(rotatedFilePath,true);
+        rotateLock.unlock();
+    }
+
+
+
 
     /**
      * 将内存表中的命令刷新到磁盘。
@@ -149,7 +263,8 @@ public class NormalStore implements Store {
      * 写入磁盘的过程包括：为每个命令生成字节码、写入长度、写入实际的字节码内容，并在写入完成后更新索引。
      * 如果在写入过程中发生IOException，将抛出RuntimeException。
      */
-    private synchronized void flushMemTableToDisk() {
+    private synchronized void flushMemTableToDisk() throws IOException {
+
         // 如果内存表为空，则无需进行刷新操作
         if (memTable.isEmpty()) return; // 如果没有数据需要刷盘，直接返回
 
@@ -177,6 +292,8 @@ public class NormalStore implements Store {
 
         // 清空内存表，为新的命令预留空间
         memTable.clear();
+        // 检查是否需要rotate
+        checkAndRotateIfNeeded();
     }
 
     /**
@@ -195,7 +312,6 @@ public class NormalStore implements Store {
             // 获取写锁，以确保并发操作时的线程安全。
             // 加锁
             indexLock.writeLock().lock();
-            try {
                 // 在文件中写入命令的长度，用于后续读取时定位命令位置。
                 // TODO://先写内存表，内存表达到一定阀值再写进磁盘
                 // 先更新内存表
@@ -205,9 +321,6 @@ public class NormalStore implements Store {
                     flushMemTableToDisk();
                 }
                 // TODO://判断是否需要将内存表中的值写回table
-            } finally {
-                // 释放写锁。
-            }
         } catch (Throwable t) {
             // 如果发生任何异常，抛出运行时异常。
             throw new RuntimeException(t);
@@ -305,8 +418,19 @@ public class NormalStore implements Store {
     }
 
 
-    @Override
-    public void close() throws IOException {
-
+/**
+ * 关闭当前实例，并释放相关资源。
+ * 此方法确保了在关闭过程中，所有的压缩任务得以完成，并且内存中的数据被刷新到磁盘。
+ * 如果压缩执行器在指定时间内未能关闭，将强制关闭所有任务。
+ *
+ * @throws IOException 如果关闭过程中发生I/O错误。
+ */
+@Override
+public void close() throws IOException {
+    // 如果writerReader不为空，则尝试关闭它。
+    if (writerReader != null) {
+        writerReader.close();
+    }
+    flushMemTableToDisk();
     }
 }
