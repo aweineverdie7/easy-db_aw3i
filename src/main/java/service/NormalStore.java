@@ -24,6 +24,8 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.nio.ByteBuffer;
+
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
@@ -35,6 +37,10 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import static utils.CompressionUtils.decompressGZFile;
 
 public class NormalStore implements Store {
 
@@ -95,27 +101,47 @@ public class NormalStore implements Store {
         this.reloadIndex();
     }
 
-    private int initializeFileCounter() {
-        File dir = new File(dataDir);
-        File[] files = dir.listFiles((d, name) -> name.startsWith(NAME) && name.endsWith(TABLE));
-        if (files == null || files.length == 0) {
-            return 0;
-        }
+/**
+ * 初始化文件计数器。
+ * 该方法用于确定当前数据目录中最大文件编号，并返回其加一值，用于生成新文件的名称。
+ * 文件名应以特定格式开始，后跟一个数字和表名，可能以.gz结尾。
+ *
+ * @return 返回最大文件编号加一后的值，如果目录中没有文件，则返回0。
+ */
+private int initializeFileCounter() {
+    // 创建数据目录的File对象
+    File dir = new File(dataDir);
+    // 使用文件过滤器列出所有以指定名称开始，以表名或.gz表名结尾的文件
+    File[] files = dir.listFiles((d, name) -> name.startsWith(NAME) && (name.endsWith(TABLE) || name.endsWith(TABLE + ".gz")));
 
-        int maxCounter = 0;
-        for (File file : files) {
-            String fileName = file.getName();
-            if (fileName.equals(NAME + TABLE)) {
-                continue; // 跳过当前的 data.table 文件
-            }
-            String counterStr = fileName.substring(NAME.length(), fileName.length() - TABLE.length());
-            int counter = Integer.parseInt(counterStr);
+    // 如果目录为空或没有符合条件的文件，返回0
+    if (files == null || files.length == 0) {
+        return 0;
+    }
+
+    int maxCounter = 0;
+    // 编译正则表达式，用于匹配文件名中的数字部分
+    Pattern pattern = Pattern.compile(NAME + "(\\d+)" + TABLE + "(\\.gz)?");
+    // 遍历所有文件，寻找最大文件编号
+    for (File file : files) {
+        // 使用正则表达式匹配文件名
+        Matcher matcher = pattern.matcher(file.getName());
+        // 如果匹配成功
+        if (matcher.find()) {
+            // 解析文件名中的数字部分
+            int counter = Integer.parseInt(matcher.group(1));
+            // 更新最大文件编号
             if (counter > maxCounter) {
                 maxCounter = counter;
             }
         }
-        return maxCounter + 1;
     }
+    // 返回最大文件编号加一后的值
+    return maxCounter + 1;
+}
+
+
+
 
     public String genFilePath(int fileCounter) {
         return this.dataDir + File.separator + NAME + fileCounter + TABLE;
@@ -124,59 +150,74 @@ public class NormalStore implements Store {
     public String getCurrentFilePath() {
         return this.dataDir + File.separator + NAME + TABLE;
     }
-
-
-    /**
-     * 重新加载索引。从文件中读取命令数据，并根据命令内容更新索引。
-     * 这个方法用于在程序运行时动态更新索引，以便快速定位和执行历史命令。
-     */
-    public void reloadIndex() {
-        try {
-            for (int i = 0; i < fileCounter; i++) { // 遍历所有文件
-                RandomAccessFile file = new RandomAccessFile(this.genFilePath(i), RW_MODE);
-                long len = file.length();
-                long start = 0;
-                file.seek(start);
-                while (start < len) {
-                    int cmdLen = file.readInt();
-                    byte[] bytes = new byte[cmdLen];
-                    file.read(bytes);
-                    JSONObject value = JSON.parseObject(new String(bytes, StandardCharsets.UTF_8));
-                    Command command = CommandUtil.jsonToCommand(value);
-                    start += 4;
-                    if (command != null) {
-                        CommandPos cmdPos = new CommandPos((int) start, cmdLen);
-                        index.put(command.getKey(), cmdPos);
-                    }
-                    start += cmdLen;
-                }
-                file.seek(file.length());
-            }
-            // 处理当前的 data.table 文件
-            RandomAccessFile currentFile = new RandomAccessFile(this.getCurrentFilePath(), RW_MODE);
-            this.writerReader = currentFile;
-            long len = currentFile.length();
-            long start = 0;
-            currentFile.seek(start);
-            while (start < len) {
-                int cmdLen = currentFile.readInt();
-                byte[] bytes = new byte[cmdLen];
-                currentFile.read(bytes);
-                JSONObject value = JSON.parseObject(new String(bytes, StandardCharsets.UTF_8));
-                Command command = CommandUtil.jsonToCommand(value);
-                start += 4;
-                if (command != null) {
-                    CommandPos cmdPos = new CommandPos((int) start, cmdLen);
-                    index.put(command.getKey(), cmdPos);
-                }
-                start += cmdLen;
-            }
-            currentFile.seek(currentFile.length());
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-        LoggerUtil.debug(LOGGER, logFormat, "reload index: " + index.toString());
+    public String getGzFilePath(int fileCounter){
+        return this.dataDir + File.separator + NAME + fileCounter + TABLE + ".gz";
     }
+
+
+public void reloadIndex() {
+    try {
+        for (int i = 0; i < fileCounter; i++) { // 遍历所有文件
+            String filePath = this.genFilePath(i);
+            long fileLength = new File(filePath).length();
+            if(filePath.endsWith(".gz")) {
+                // 使用获取到的文件长度作为读取长度，从位置0开始读取
+                byte[] decompressedData = decompressGZFile(filePath, 0, (int) fileLength);
+                ByteArrayInputStream bais = new ByteArrayInputStream(decompressedData);
+                loadCommandsFromStream(bais);
+            }
+//            else {
+//                // 处理非压缩文件
+//                RandomAccessFile file = new RandomAccessFile(filePath, RW_MODE);
+//                loadCommandsFromStream(new FileInputStream(file.getFD()));
+//            }
+        }
+        // 处理当前的 data.table 文件
+            RandomAccessFile currentFile = new RandomAccessFile(this.getCurrentFilePath(), RW_MODE);
+            loadCommandsFromStream(new FileInputStream(currentFile.getFD()));
+
+    } catch (Exception e) {
+        e.printStackTrace();
+    }
+    LoggerUtil.debug(LOGGER, logFormat, "reload index: " + index.toString());
+}
+
+/**
+ * 从输入流中加载命令。
+ * 此方法用于解析输入流中的命令数据，每条命令由长度前缀和JSON格式的数据组成。
+ * 它将解析出的命令存储到索引中，以便后续可以快速访问和执行这些命令。
+ *
+ * @param inputStream 输入流，包含待加载的命令数据。
+ * @throws IOException 如果在读取输入流时发生错误。
+ */
+private void loadCommandsFromStream(InputStream inputStream) throws IOException {
+    // 使用BufferedInputStream提高读取效率
+    try (BufferedInputStream bis = new BufferedInputStream(inputStream)) {
+        // 用于存储长度前缀的字节数组
+        byte[] lengthBytes = new byte[4];
+
+        // 循环读取输入流中的数据，直到读取结束
+        while (bis.read(lengthBytes) != -1) {
+            // 将长度前缀字节数组转换为整数，表示当前命令的长度
+            int cmdLen = ByteBuffer.wrap(lengthBytes).getInt();
+            // 创建一个字节数组，用于存储读取的命令数据
+            byte[] bytes = new byte[cmdLen];
+            // 从输入流中读取命令数据
+            bis.read(bytes);
+            // 将字节数组转换为字符串，然后解析为JSONObject
+            JSONObject value = JSON.parseObject(new String(bytes, StandardCharsets.UTF_8));
+            // 将JSON对象转换为Command对象
+            Command command = CommandUtil.jsonToCommand(value);
+            // 如果转换成功，则将命令及其长度存储到索引中
+            if (command != null) {
+                CommandPos cmdPos = new CommandPos(-1, cmdLen);
+                index.put(command.getKey(), cmdPos);
+            }
+        }
+    }
+}
+
+
 
 
     /**
@@ -188,11 +229,14 @@ public class NormalStore implements Store {
      */
     // 检查并执行rotate操作
     private synchronized void checkAndRotateIfNeeded() throws IOException {
+        this.writerReader = new RandomAccessFile(this.getCurrentFilePath(), RW_MODE);
         // 检查当前文件的大小是否达到轮转的阈值
         if (this.writerReader.length() >= FILE_SIZE_THRESHOLD) {
             // 如果达到阈值，则执行文件轮转操作
             rotateFile();
         }
+        this.writerReader.close();
+
     }
     /**
      * 执行日志文件的滚动操作。
@@ -217,7 +261,7 @@ public class NormalStore implements Store {
         this.writerReader = new RandomAccessFile(getCurrentFilePath(), RW_MODE);
         fileCounter++; // 增加文件计数器
         // 异步压缩滚动后的日志文件，以减少滚动操作对当前写入操作的影响。
-        CompressionUtils.compressFileAsync(rotatedFilePath,false);
+        CompressionUtils.compressFileAsync(rotatedFilePath,true);
         rotateLock.unlock();
     }
 
@@ -249,7 +293,7 @@ public class NormalStore implements Store {
             // 写入命令字节码的长度，用于后续读取时定位命令的起始位置
             RandomAccessFileUtil.writeInt(this.getCurrentFilePath(), commandBytes.length);
             // 写入命令字节码到磁盘，并记录写入的位置信息
-            int pos = RandomAccessFileUtil.write(this.getCurrentFilePath(), commandBytes);
+            long pos = RandomAccessFileUtil.write(this.getCurrentFilePath(), commandBytes);
             CommandPos cmdPos = new CommandPos(pos, commandBytes.length);
             // 将命令的位置信息添加到临时索引中
             tempIndex.put(entry.getKey(), cmdPos); // 使用临时索引记录
@@ -321,18 +365,33 @@ public class NormalStore implements Store {
                     return null;
                 }
             }
-
-            for (int i = fileCounter - 1; i >= 0; i--) { // 遍历所有文件
-                CommandPos cmdPos = index.get(key);
-                if (cmdPos == null) continue;
-                byte[] commandBytes = RandomAccessFileUtil.readByIndex(this.genFilePath(i), cmdPos.getPos(), cmdPos.getLen());
+            //对当前活跃的data.table文件的直接访问逻辑
+            CommandPos cmdPos = index.get(key);
+            if (cmdPos != null) {
+                byte[] commandBytes = RandomAccessFileUtil.readByIndex(getCurrentFilePath(), cmdPos.getPos(), cmdPos.getLen());
                 JSONObject value = JSONObject.parseObject(new String(commandBytes));
                 Command cmd = CommandUtil.jsonToCommand(value);
                 if (cmd instanceof SetCommand) {
                     return ((SetCommand) cmd).getValue();
-                }
-                if (cmd instanceof RmCommand) {
+                } else if (cmd instanceof RmCommand) {
                     return null;
+                }
+            }
+
+
+            for (int i = fileCounter - 1; i >= 0; i--) { // 遍历所有文件
+                if (cmdPos == null) continue;
+                String filePath = this.getGzFilePath(i);
+                if(filePath.endsWith(".gz")) {
+                    // 处理gz压缩文件
+                    byte[] decompressedBytes = decompressGZFile(filePath, cmdPos.getPos(), cmdPos.getLen());
+                    JSONObject value = JSONObject.parseObject(new String(decompressedBytes));
+                    Command cmd = CommandUtil.jsonToCommand(value);
+                    if (cmd instanceof SetCommand) {
+                        return ((SetCommand) cmd).getValue();
+                    } else if (cmd instanceof RmCommand) {
+                        return null;
+                    }
                 }
             }
         } catch (Throwable t) {

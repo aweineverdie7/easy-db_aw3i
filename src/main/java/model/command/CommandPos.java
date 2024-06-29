@@ -13,10 +13,10 @@ import lombok.Setter;
 @Setter
 @Getter
 public class CommandPos {
-    private int pos;
+    private long pos;
     private int len;
 
-    public CommandPos(int pos, int len) {
+    public CommandPos(long pos, int len) {
         this.pos = pos;
         this.len = len;
     }

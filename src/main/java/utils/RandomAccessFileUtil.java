@@ -23,7 +23,7 @@ public class RandomAccessFileUtil {
      * @return 返回写入文件后文件的总长度。
      * @throws IOException 如果发生文件操作相关的异常。
      */
-    public static int write(String filePath, byte[] value) {
+    public static long write(String filePath, byte[] value) {
         // 使用RandomAccessFile来实现文件的读写操作。
         RandomAccessFile file = null;
         // 初始化文件长度为-1，用于后续返回写入后的文件长度。
@@ -44,7 +44,7 @@ public class RandomAccessFileUtil {
             e.printStackTrace();
         }
         // 将文件长度转换为整型并返回，注意这里可能会发生数据类型转换溢出。
-        return (int)len;
+        return len;
     }
 
     /**
@@ -87,14 +87,14 @@ public class RandomAccessFileUtil {
      * @param len      读取的长度，指定要读取的字节数量。
      * @return 返回读取的字节数据，如果发生异常则返回null。
      */
-    public static byte[] readByIndex(String filePath, int index, int len) {
+    public static byte[] readByIndex(String filePath, long index, int len) {
         RandomAccessFile file = null;
         byte[] res = new byte[len];
         try {
             // 使用RandomAccessFile打开文件，以读写模式（"rw"）访问。
             file = new RandomAccessFile(filePath, RW_MODE);
             // 将文件指针定位到指定的索引位置。
-            file.seek((long)index);
+            file.seek(index);
             // 从当前位置开始读取指定长度的字节到res数组中。
             file.read(res, 0, len);
             return res;

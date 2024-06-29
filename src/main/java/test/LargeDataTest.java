@@ -37,8 +37,37 @@ public class LargeDataTest {
                 System.out.println("进度: " + (i / (double) TOTAL_PAIRS * 100) + "%");
             }
         }
+        store.set("awei", "202210244317");
 
         System.out.println("数据写入完成。");
+        // 验证get操作
+        System.out.println("验证读取操作...");
+        int testKeyIndex = 101027; // 选择中间的一个键进行测试
+        String testKey = "key_" + String.format("%05d", testKeyIndex);
+        String retrievedValue = store.get(testKey);
+        System.out.println("键 '" + testKey + "' 的值为: " + retrievedValue);
+        String awei = store.get("awei");
+        System.out.println("键 'awei' 的值为: " + awei);
+        // 测试rm操作并再次get以验证删除
+        System.out.println("测试删除操作...");
+        String keyToRemove = "key_" + String.format("%05d", testKeyIndex);
+        store.rm(keyToRemove);
+        store.rm("awei");
+            System.out.println("键 '" + keyToRemove + "' 待验证删除。");
+            // 尝试再次获取已删除的键，预期结果应为null
+            String valueAfterRemove = store.get(keyToRemove);
+            String aweiAfterRemove = store.get("awei");
+            if (aweiAfterRemove == null) {
+                System.out.println("验证通过: 删除后的键 'awei' 无法获取。");
+            } else {
+                System.out.println("错误: 删除后的键 'awei' 仍可获取。");
+            }
+            if (valueAfterRemove == null) {
+                System.out.println("验证通过: 删除后的键 '" + keyToRemove + "' 无法获取。");
+            } else {
+                System.out.println("错误: 删除后的键仍可获取。");
+            }
+
     }
 }
 
