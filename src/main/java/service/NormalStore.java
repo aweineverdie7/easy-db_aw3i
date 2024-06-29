@@ -78,6 +78,7 @@ public class NormalStore implements Store {
 
     private int rotateIndex = 0; // 用于rotate文件的序号
     private final Lock rotateLock; // 新增的旋转锁
+    private int fileCounter;
     public NormalStore(String dataDir) {
         this.dataDir = dataDir;
         this.indexLock = new ReentrantReadWriteLock();
@@ -90,22 +91,39 @@ public class NormalStore implements Store {
             LoggerUtil.info(LOGGER,logFormat, "NormalStore","dataDir isn't exist,creating...");
             file.mkdirs();
         }
+        this.fileCounter = initializeFileCounter();
         this.reloadIndex();
     }
 
-    /**
-     * 生成文件路径.
-     * 此方法通过组合数据目录路径、一个固定的名称和一个表标识符来生成一个唯一的文件路径。
-     * 主要用于存储或检索与特定表相关联的数据文件。路径的构造依赖于系统的文件分隔符，
-     * 确保了路径在不同操作系统上的兼容性。
-     *
-     * @return 返回构造的文件路径字符串。
-     */
-    public String genFilePath() {
-        // 使用文件分隔符连接数据目录、名称和表标识符以构造文件路径
-        return this.dataDir + File.separator + NAME + TABLE;
+    private int initializeFileCounter() {
+        File dir = new File(dataDir);
+        File[] files = dir.listFiles((d, name) -> name.startsWith(NAME) && name.endsWith(TABLE));
+        if (files == null || files.length == 0) {
+            return 0;
+        }
+
+        int maxCounter = 0;
+        for (File file : files) {
+            String fileName = file.getName();
+            if (fileName.equals(NAME + TABLE)) {
+                continue; // 跳过当前的 data.table 文件
+            }
+            String counterStr = fileName.substring(NAME.length(), fileName.length() - TABLE.length());
+            int counter = Integer.parseInt(counterStr);
+            if (counter > maxCounter) {
+                maxCounter = counter;
+            }
+        }
+        return maxCounter + 1;
     }
 
+    public String genFilePath(int fileCounter) {
+        return this.dataDir + File.separator + NAME + fileCounter + TABLE;
+    }
+
+    public String getCurrentFilePath() {
+        return this.dataDir + File.separator + NAME + TABLE;
+    }
 
 
     /**
@@ -114,50 +132,52 @@ public class NormalStore implements Store {
      */
     public void reloadIndex() {
         try {
-            // 打开文件以进行随机访问读写。
-            RandomAccessFile file = new RandomAccessFile(this.genFilePath(), RW_MODE);
-            this.writerReader = file;
-            // 获取文件长度，用于后续循环读取文件。
-            long len = file.length();
+            for (int i = 0; i < fileCounter; i++) { // 遍历所有文件
+                RandomAccessFile file = new RandomAccessFile(this.genFilePath(i), RW_MODE);
+                long len = file.length();
+                long start = 0;
+                file.seek(start);
+                while (start < len) {
+                    int cmdLen = file.readInt();
+                    byte[] bytes = new byte[cmdLen];
+                    file.read(bytes);
+                    JSONObject value = JSON.parseObject(new String(bytes, StandardCharsets.UTF_8));
+                    Command command = CommandUtil.jsonToCommand(value);
+                    start += 4;
+                    if (command != null) {
+                        CommandPos cmdPos = new CommandPos((int) start, cmdLen);
+                        index.put(command.getKey(), cmdPos);
+                    }
+                    start += cmdLen;
+                }
+                file.seek(file.length());
+            }
+            // 处理当前的 data.table 文件
+            RandomAccessFile currentFile = new RandomAccessFile(this.getCurrentFilePath(), RW_MODE);
+            this.writerReader = currentFile;
+            long len = currentFile.length();
             long start = 0;
-            file.seek(start);
-            // 从文件开始位置循环读取，直到读取到文件末尾。
+            currentFile.seek(start);
             while (start < len) {
-                // 读取命令长度。
-                int cmdLen = file.readInt();
-                // 根据命令长度创建字节数组，用于存储读取的命令数据。
+                int cmdLen = currentFile.readInt();
                 byte[] bytes = new byte[cmdLen];
-                // 读取命令数据。
-                file.read(bytes);
-                // 将字节数组转换为字符串，然后解析为JSONObject。
+                currentFile.read(bytes);
                 JSONObject value = JSON.parseObject(new String(bytes, StandardCharsets.UTF_8));
-                // 根据JSONObject解析出具体的命令对象。
                 Command command = CommandUtil.jsonToCommand(value);
                 start += 4;
-                // 如果命令对象不为空，则构建命令位置对象，并更新索引。
                 if (command != null) {
                     CommandPos cmdPos = new CommandPos((int) start, cmdLen);
                     index.put(command.getKey(), cmdPos);
                 }
-                // 更新当前读取位置到下一个命令的起始位置。
                 start += cmdLen;
             }
-            // 将文件读取指针移动到文件末尾，为后续写入做准备。
-            file.seek(file.length());
+            currentFile.seek(currentFile.length());
         } catch (Exception e) {
-            // 捕获并打印异常信息。
             e.printStackTrace();
         }
-        // 日志记录索引加载情况。
-        LoggerUtil.debug(LOGGER, logFormat, "reload index: "+index.toString());
+        LoggerUtil.debug(LOGGER, logFormat, "reload index: " + index.toString());
     }
 
-    // 生成带时间戳和序号的文件路径
-    private String generateRotatedFilePath() {
-        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
-        String timestamp = LocalDateTime.now().format(formatter);
-        return dataDir + File.separator + NAME  + "_" + timestamp + "_" + rotateIndex+ TABLE;
-    }
 
     /**
      * 检查当前文件的大小，如果达到指定的阈值，则进行文件轮转。
@@ -174,57 +194,6 @@ public class NormalStore implements Store {
             rotateFile();
         }
     }
-
-/**
- * 加载旋转过的文件，这些文件包含历史命令数据。
- * 该方法用于将这些历史命令数据读入内存，以便可以快速访问和执行。
- */
-private void loadRotatedFiles() {
-    // 创建一个File对象，指向存储数据的目录
-    File dir = new File(dataDir);
-    // 列出所有符合命名规则的文件，即以NAME+ "_" 开头，以 TABLE 结尾，但不等于当前正在使用的文件名
-    File[] files = dir.listFiles((d, name) -> name.startsWith(NAME + "_") && name.endsWith(TABLE) && !name.equals(NAME + TABLE));
-    // 遍历文件数组
-    if (files != null) {
-        for (File rotatedFile : files) {
-            try (RandomAccessFile raf = new RandomAccessFile(rotatedFile.getAbsolutePath(), "r")) {
-                // 获取文件长度
-                long len = raf.length();
-                // 从文件开始位置读取
-                long start = 0;
-                // 当当前读取位置小于文件长度时，继续读取
-                while (start < len) {
-                    // 读取命令的长度
-                    int cmdLen = raf.readInt();
-                    // 根据命令长度创建一个字节数组
-                    byte[] bytes = new byte[cmdLen];
-                    // 读取命令的全部字节
-                    raf.readFully(bytes);
-                    // 将字节数组转换为字符串
-                    String jsonString = new String(bytes, StandardCharsets.UTF_8);
-                    // 将字符串解析为JSONObject
-                    JSONObject jsonObject = JSON.parseObject(jsonString);
-                    // 将JSONObject转换为Command对象
-                    Command command = CommandUtil.jsonToCommand(jsonObject);
-                    // 如果命令对象不为空，则将其索引添加到index中
-                    if (command != null) {
-                        // 创建CommandPos对象，记录命令在文件中的位置和长度
-                        CommandPos cmdPos = new CommandPos((int) start, cmdLen);
-                        // 将命令的键和CommandPos对象添加到index中
-                        index.put(command.getKey(), cmdPos);
-                    }
-                    // 更新当前读取位置，为下一个命令做准备
-                    start += 4 + cmdLen;
-                }
-            } catch (IOException e) {
-                // 如果在读取文件时发生IO异常，则记录错误日志
-                LOGGER.error("Error loading rotated file: {}", rotatedFile.getName(), e);
-            }
-        }
-    }
-}
-
-
     /**
      * 执行日志文件的滚动操作。
      * 当需要滚动日志文件时，此方法将当前正在写入的日志文件重命名并压缩，然后创建一个新的日志文件以继续写入。
@@ -241,15 +210,14 @@ private void loadRotatedFiles() {
         //开锁
         rotateLock.lock();
         // 生成滚动后的文件路径。
-        String rotatedFilePath = generateRotatedFilePath();
+        String rotatedFilePath = genFilePath(fileCounter);
         // 将当前的日志文件移动到滚动后的路径，实质上是进行了重命名。
-        Files.move(Paths.get(genFilePath()), Paths.get(rotatedFilePath));
+        Files.move(Paths.get(getCurrentFilePath()), Paths.get(rotatedFilePath));
         // 创建一个新的RandomAccessFile实例，用于写入新的日志文件。
-        this.writerReader = new RandomAccessFile(genFilePath(), RW_MODE);
-        // 增加滚动索引，用于区分不同的滚动版本。
-        rotateIndex++;
+        this.writerReader = new RandomAccessFile(getCurrentFilePath(), RW_MODE);
+        fileCounter++; // 增加文件计数器
         // 异步压缩滚动后的日志文件，以减少滚动操作对当前写入操作的影响。
-        CompressionUtils.compressFileAsync(rotatedFilePath,true);
+        CompressionUtils.compressFileAsync(rotatedFilePath,false);
         rotateLock.unlock();
     }
 
@@ -279,9 +247,9 @@ private void loadRotatedFiles() {
             // 将命令序列化为JSON字节码
             byte[] commandBytes = JSONObject.toJSONBytes(command);
             // 写入命令字节码的长度，用于后续读取时定位命令的起始位置
-            RandomAccessFileUtil.writeInt(this.genFilePath(), commandBytes.length);
+            RandomAccessFileUtil.writeInt(this.getCurrentFilePath(), commandBytes.length);
             // 写入命令字节码到磁盘，并记录写入的位置信息
-            int pos = RandomAccessFileUtil.write(this.genFilePath(), commandBytes);
+            int pos = RandomAccessFileUtil.write(this.getCurrentFilePath(), commandBytes);
             CommandPos cmdPos = new CommandPos(pos, commandBytes.length);
             // 将命令的位置信息添加到临时索引中
             tempIndex.put(entry.getKey(), cmdPos); // 使用临时索引记录
@@ -345,7 +313,6 @@ private void loadRotatedFiles() {
         try {
             indexLock.readLock().lock();
 
-            // 先检查内存缓存
             Command cachedCommand = memTable.get(key);
             if (cachedCommand != null) {
                 if (cachedCommand instanceof SetCommand) {
@@ -355,21 +322,19 @@ private void loadRotatedFiles() {
                 }
             }
 
-            // 再检查磁盘数据
-            CommandPos cmdPos = index.get(key);
-            if (cmdPos == null) {
-                return null;
+            for (int i = fileCounter - 1; i >= 0; i--) { // 遍历所有文件
+                CommandPos cmdPos = index.get(key);
+                if (cmdPos == null) continue;
+                byte[] commandBytes = RandomAccessFileUtil.readByIndex(this.genFilePath(i), cmdPos.getPos(), cmdPos.getLen());
+                JSONObject value = JSONObject.parseObject(new String(commandBytes));
+                Command cmd = CommandUtil.jsonToCommand(value);
+                if (cmd instanceof SetCommand) {
+                    return ((SetCommand) cmd).getValue();
+                }
+                if (cmd instanceof RmCommand) {
+                    return null;
+                }
             }
-            byte[] commandBytes = RandomAccessFileUtil.readByIndex(this.genFilePath(), cmdPos.getPos(), cmdPos.getLen());
-            JSONObject value = JSONObject.parseObject(new String(commandBytes));
-            Command cmd = CommandUtil.jsonToCommand(value);
-            if (cmd instanceof SetCommand) {
-                return ((SetCommand) cmd).getValue();
-            }
-            if (cmd instanceof RmCommand) {
-                return null;
-            }
-
         } catch (Throwable t) {
             throw new RuntimeException(t);
         } finally {

@@ -2,9 +2,11 @@ package utils;
 
 import java.io.*;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
 public class CompressionUtils {
@@ -55,5 +57,45 @@ public class CompressionUtils {
             }
         });
     }
+    /**
+     * 解压缩GZIP文件到指定路径或删除.gz后缀还原原文件名。
+     *
+     * @param compressedFilePath 压缩文件路径。
+     * @param destinationPath   解压后文件存放路径，如果不指定则默认解压到与压缩文件同目录并去除.gz后缀。
+     * @throws IOException 如果文件读写过程中发生错误。
+     */
+    public static void decompressFile(String compressedFilePath, String destinationPath) throws IOException {
+        Path source = Paths.get(compressedFilePath);
+        Path target = destinationPath == null ?
+                source.getParent().resolve(source.getFileName().toString().replace(".gz", "")) :
+                Paths.get(destinationPath);
 
+        try (
+                FileInputStream fis = new FileInputStream(compressedFilePath);
+                GZIPInputStream gzipIS = new GZIPInputStream(fis);
+                FileOutputStream fos = new FileOutputStream(target.toFile())
+        ) {
+            byte[] buffer = new byte[1024];
+            int read;
+            while ((read = gzipIS.read(buffer)) != -1) {
+                fos.write(buffer, 0, read);
+            }
+        }
+    }
+    /**
+     * 异步解压缩文件。
+     * 使用线程池中的线程执行文件解压缩操作。
+     *
+     * @param compressedFilePath 压缩文件路径。
+     * @param destinationPath 解压后文件存放路径。
+     */
+    public static void decompressFileAsync(String compressedFilePath, String destinationPath) {
+        compressionExecutor.submit(() -> {
+            try {
+                decompressFile(compressedFilePath, destinationPath);
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
 }
