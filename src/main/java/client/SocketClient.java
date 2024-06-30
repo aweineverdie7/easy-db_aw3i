@@ -23,12 +23,19 @@ public class SocketClient implements Client {
         this.port = port;
     }
     public boolean canConnectToServer() {
-        try (Socket socket = new Socket(host, port)) {
-            // 连接成功，不执行任何读写操作，直接返回true
-            return true;
-        } catch (IOException e) {
-            // 连接失败，打印异常信息（可选）
-            System.err.println("Failed to connect to server: " + e.getMessage());
+        try (Socket socket = new Socket(host, port);
+             ObjectOutputStream oos = new ObjectOutputStream(socket.getOutputStream());
+             ObjectInputStream ois = new ObjectInputStream(socket.getInputStream())) {
+            // 传输序列化对象
+            ActionDTO dto = new ActionDTO(ActionTypeEnum.CONNET,null,null);
+            oos.writeObject(dto);
+            oos.flush();
+            RespDTO resp = (RespDTO) ois.readObject();
+//            System.out.println("resp data: "+ resp.toString());
+           return true;
+            // 接收响应数据
+        } catch (IOException | ClassNotFoundException e) {
+            e.printStackTrace();
             return false;
         }
     }

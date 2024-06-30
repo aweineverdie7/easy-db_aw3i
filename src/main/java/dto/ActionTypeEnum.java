@@ -9,6 +9,10 @@ package dto;
 
 public enum ActionTypeEnum {
     /*
+     * 连接
+     * */
+    CONNET,
+    /*
      * 增、改
      * */
     SET,
