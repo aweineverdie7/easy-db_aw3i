@@ -22,6 +22,16 @@ public class SocketClient implements Client {
         this.host = host;
         this.port = port;
     }
+    public boolean canConnectToServer() {
+        try (Socket socket = new Socket(host, port)) {
+            // 连接成功，不执行任何读写操作，直接返回true
+            return true;
+        } catch (IOException e) {
+            // 连接失败，打印异常信息（可选）
+            System.err.println("Failed to connect to server: " + e.getMessage());
+            return false;
+        }
+    }
 
     @Override
     public void set(String key, String value) {
@@ -52,6 +62,7 @@ public class SocketClient implements Client {
             RespDTO resp = (RespDTO) ois.readObject();
             System.out.println("resp data: "+ resp.toString());
             // 接收响应数据
+            return resp.getValue();
         } catch (IOException | ClassNotFoundException e) {
             e.printStackTrace();
         }
