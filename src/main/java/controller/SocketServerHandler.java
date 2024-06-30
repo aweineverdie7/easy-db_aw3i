@@ -40,7 +40,6 @@ public class SocketServerHandler implements Runnable {
             // 接收序列化对象
             ActionDTO dto = (ActionDTO) ois.readObject();
             LoggerUtil.debug(LOGGER, "[SocketServerHandler][ActionDTO]: {}", dto.toString());
-            System.out.println("" + dto.toString());
 
             // 处理命令逻辑(TODO://改成可动态适配的模式)
             if (dto.getType() == ActionTypeEnum.GET) {
@@ -59,6 +58,17 @@ public class SocketServerHandler implements Runnable {
             }
             if (dto.getType() == ActionTypeEnum.RM) {
                 this.store.rm(dto.getKey());
+                LoggerUtil.debug(LOGGER, "[SocketServerHandler][run]: {}", "em action resp" + dto.toString());
+                RespDTO resp = new RespDTO(RespStatusTypeEnum.SUCCESS, null);
+                oos.writeObject(resp);
+                oos.flush();
+            }
+            if(dto.getType() == ActionTypeEnum.EXIT){
+                this.store.close();
+                LoggerUtil.debug(LOGGER, "[SocketServerHandler][run]: {}", "exit action resp" + dto.toString());
+                RespDTO resp = new RespDTO(RespStatusTypeEnum.SUCCESS, null);
+                oos.writeObject(resp);
+                oos.flush();
             }
 
         } catch (IOException | ClassNotFoundException e) {

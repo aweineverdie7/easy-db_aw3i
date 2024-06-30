@@ -79,7 +79,7 @@ public class NormalStore implements Store {
     /**
      * 持久化阈值
      */
-    private final int storeThreshold = 1000;
+    private final int storeThreshold = 3;
     private static final long FILE_SIZE_THRESHOLD = 1024 * 1024 * 10; // 10MB
 
     private int rotateIndex = 0; // 用于rotate文件的序号
@@ -457,4 +457,12 @@ public void close() throws IOException {
     }
     flushMemTableToDisk();
     }
+
+//    @Override
+//    public void exit() throws IOException {
+//        this.close();
+//    }
 }
+
+
+

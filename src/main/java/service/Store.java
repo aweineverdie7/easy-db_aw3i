@@ -8,6 +8,7 @@
 package service;
 
 import java.io.Closeable;
+import java.io.IOException;
 
 public interface Store extends Closeable {
     void set(String key, String value);
@@ -15,4 +16,5 @@ public interface Store extends Closeable {
     String get(String key);
 
     void rm(String key);
+//    void exit() throws IOException;
 }

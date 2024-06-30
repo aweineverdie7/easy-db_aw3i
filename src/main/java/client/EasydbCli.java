@@ -9,7 +9,7 @@ import java.util.Scanner;
  * 支持通过命令行指定主机和端口登录，然后在交互式界面中执行数据库操作。
  */
 public class EasydbCli {
-    private Client client;
+    private SocketClient client;
 
     public EasydbCli() {
 
@@ -73,15 +73,9 @@ public class EasydbCli {
             System.out.print("> ");
             String input = scanner.nextLine().trim().toLowerCase();
 
-            if ("exit".equals(input)) {
-                break;
-            } else {
                 handleCommand(input.split(" "));
-            }
-        }
 
-        scanner.close();
-        System.out.println("退出程序...");
+        }
     }
 
     /**
@@ -115,9 +109,10 @@ private void handleCommand(String[] commandParts) {
             if (commandParts.length == 2) {
 //                boolean isRemoved = client.rm(commandParts[1]);
 //                if (isRemoved) {
+                    client.rm(commandParts[1]);
                     System.out.println("键 \"" + commandParts[1] + "\" 已被移除。");
 //                } else {
-                    System.out.println("键 \"" + commandParts[1] + "\" 不存在，无法移除。");
+//                    System.out.println("键 \"" + commandParts[1] + "\" 不存在，无法移除。");
 //                }
             } else {
                 System.err.println("使用方法: rm <key>");
@@ -125,6 +120,7 @@ private void handleCommand(String[] commandParts) {
             break;
         case "exit":
             System.out.println("退出程序...");
+            client.exit();
             System.exit(0); // 优雅地退出程序
             break;
         default:

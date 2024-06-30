@@ -19,5 +19,9 @@ public enum ActionTypeEnum {
     /*
     * 查
     * */
-    GET
+    GET,
+    /*
+    * 退出
+    * */
+    EXIT;
 }

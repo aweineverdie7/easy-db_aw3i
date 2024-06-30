@@ -71,7 +71,30 @@ public class SocketClient implements Client {
 
     @Override
     public void rm(String key) {
-
+        try (Socket socket = new Socket(host, port);
+             ObjectOutputStream oos = new ObjectOutputStream(socket.getOutputStream());
+             ObjectInputStream ois = new ObjectInputStream(socket.getInputStream())) {
+            // 传输序列化对象
+            ActionDTO dto = new ActionDTO(ActionTypeEnum.RM, key, null);
+            oos.writeObject(dto);
+            oos.flush();
+            RespDTO resp = (RespDTO) ois.readObject();
+        } catch (IOException | ClassNotFoundException e) {
+            e.printStackTrace();
+        }
+    }
+    public void exit() {
+        try (Socket socket = new Socket(host, port);
+             ObjectOutputStream oos = new ObjectOutputStream(socket.getOutputStream());
+             ObjectInputStream ois = new ObjectInputStream(socket.getInputStream())) {
+            // 传输序列化对象
+            ActionDTO dto = new ActionDTO(ActionTypeEnum.EXIT, null, null);
+            oos.writeObject(dto);
+            oos.flush();
+            RespDTO resp = (RespDTO) ois.readObject();
+        } catch (IOException | ClassNotFoundException e) {
+            e.printStackTrace();
+        }
     }
 
 }
