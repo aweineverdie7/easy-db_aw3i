@@ -280,9 +280,6 @@ private void loadCommandsFromStream(InputStream inputStream) throws IOException 
         // 如果内存表为空，则无需进行刷新操作
         if (memTable.isEmpty()) return; // 如果没有数据需要刷盘，直接返回
 
-        // 创建一个临时索引用于存储即将写入磁盘的命令的位置信息
-        // 可能需要临时的索引映射来记录新的位置信息
-        HashMap<String, CommandPos> tempIndex = new HashMap<>();
 
         // 遍历内存表中的每个命令
         // 遍历内存表，将每个Command写入到磁盘
@@ -296,11 +293,9 @@ private void loadCommandsFromStream(InputStream inputStream) throws IOException 
             long pos = RandomAccessFileUtil.write(this.getCurrentFilePath(), commandBytes);
             CommandPos cmdPos = new CommandPos(pos, commandBytes.length);
             // 将命令的位置信息添加到临时索引中
-            tempIndex.put(entry.getKey(), cmdPos); // 使用临时索引记录
+            this.index.put(entry.getKey(), cmdPos); // 使用临时索引记录
         }
-        // 更新索引为临时索引，完成刷新操作
-        // 用新的索引替换旧索引
-        this.index = tempIndex;
+
 
         // 清空内存表，为新的命令预留空间
         memTable.clear();
