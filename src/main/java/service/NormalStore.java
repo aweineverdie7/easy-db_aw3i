@@ -112,7 +112,7 @@ private int initializeFileCounter() {
     // 创建数据目录的File对象
     File dir = new File(dataDir);
     // 使用文件过滤器列出所有以指定名称开始，以表名或.gz表名结尾的文件
-    File[] files = dir.listFiles((d, name) -> name.startsWith(NAME) && (name.endsWith(TABLE) || name.endsWith(TABLE + ".gz")));
+    File[] files = dir.listFiles((d, name) -> name.startsWith(NAME) && (name.endsWith(TABLE) || name.endsWith(TABLE)));
 
     // 如果目录为空或没有符合条件的文件，返回0
     if (files == null || files.length == 0) {
@@ -121,7 +121,7 @@ private int initializeFileCounter() {
 
     int maxCounter = 0;
     // 编译正则表达式，用于匹配文件名中的数字部分
-    Pattern pattern = Pattern.compile(NAME + "(\\d+)" + TABLE + "(\\.gz)?");
+    Pattern pattern = Pattern.compile(NAME + "(\\d+)" + TABLE );
     // 遍历所有文件，寻找最大文件编号
     for (File file : files) {
         // 使用正则表达式匹配文件名
@@ -160,11 +160,10 @@ public void reloadIndex() {
         for (int i = 0; i < fileCounter; i++) { // 遍历所有文件
             String filePath = this.genFilePath(i);
             long fileLength = new File(filePath).length();
-            if(filePath.endsWith(".gz")) {
+            if(filePath.endsWith(TABLE)) {
                 // 使用获取到的文件长度作为读取长度，从位置0开始读取
-                byte[] decompressedData = decompressGZFile(filePath, 0, (int) fileLength);
-                ByteArrayInputStream bais = new ByteArrayInputStream(decompressedData);
-                loadCommandsFromStream(bais);
+                RandomAccessFile currentFile = new RandomAccessFile(filePath, RW_MODE);
+                loadCommandsFromStream(new FileInputStream(currentFile.getFD()));
             }
 //            else {
 //                // 处理非压缩文件
@@ -260,11 +259,56 @@ private void loadCommandsFromStream(InputStream inputStream) throws IOException 
         // 创建一个新的RandomAccessFile实例，用于写入新的日志文件。
         this.writerReader = new RandomAccessFile(getCurrentFilePath(), RW_MODE);
         fileCounter++; // 增加文件计数器
-        // 异步压缩滚动后的日志文件，以减少滚动操作对当前写入操作的影响。
-        CompressionUtils.compressFileAsync(rotatedFilePath,true);
+        //TODO:异步压缩文件，将table文件去重
+        compressFile(rotatedFilePath);
         rotateLock.unlock();
     }
 
+    /**
+     * 压缩文件，保留相同key的最后命令。
+     *
+     * @param filePath 要压缩的文件路径。
+     * @throws IOException 如果在压缩过程中发生I/O错误。
+     */
+    private void compressFile(String filePath) throws IOException {
+        // 创建一个临时文件用于写入压缩后的数据
+        String tempFilePath = filePath + ".tmp";
+        RandomAccessFile tempFile = new RandomAccessFile(tempFilePath, RW_MODE);
+
+        // 用于存储最后命令的Map
+        HashMap<String, Command> lastCommands = new HashMap<>();
+
+        // 读取原始文件并填充lastCommands Map
+        try (RandomAccessFile originalFile = new RandomAccessFile(filePath, RW_MODE)) {
+            byte[] lengthBytes = new byte[4];
+
+            while (originalFile.read(lengthBytes) != -1) {
+                int cmdLen = ByteBuffer.wrap(lengthBytes).getInt();
+                byte[] commandBytes = new byte[cmdLen];
+                originalFile.read(commandBytes);
+
+                JSONObject value = JSON.parseObject(new String(commandBytes, StandardCharsets.UTF_8));
+                Command command = CommandUtil.jsonToCommand(value);
+
+                if (command != null) {
+                    lastCommands.put(command.getKey(), command);
+                }
+            }
+        }
+
+        // 将最后命令写入临时文件
+        for (Command command : lastCommands.values()) {
+            byte[] commandBytes = JSONObject.toJSONBytes(command);
+            tempFile.writeInt(commandBytes.length);
+            tempFile.write(commandBytes);
+        }
+
+        // 关闭临时文件
+        tempFile.close();
+
+        // 替换原始文件为压缩后的文件
+        Files.move(Paths.get(tempFilePath), Paths.get(filePath), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+    }
 
 
 
@@ -292,8 +336,8 @@ private void loadCommandsFromStream(InputStream inputStream) throws IOException 
             // 写入命令字节码到磁盘，并记录写入的位置信息
             long pos = RandomAccessFileUtil.write(this.getCurrentFilePath(), commandBytes);
             CommandPos cmdPos = new CommandPos(pos, commandBytes.length);
-            // 将命令的位置信息添加到临时索引中
-            this.index.put(entry.getKey(), cmdPos); // 使用临时索引记录
+            // 将命令的位置信息添加到索引中
+            this.index.put(entry.getKey(), cmdPos);
         }
 
 
@@ -376,17 +420,14 @@ private void loadCommandsFromStream(InputStream inputStream) throws IOException 
 
             for (int i = fileCounter - 1; i >= 0; i--) { // 遍历所有文件
                 if (cmdPos == null) continue;
-                String filePath = this.getGzFilePath(i);
-                if(filePath.endsWith(".gz")) {
-                    // 处理gz压缩文件
-                    byte[] decompressedBytes = decompressGZFile(filePath, cmdPos.getPos(), cmdPos.getLen());
-                    JSONObject value = JSONObject.parseObject(new String(decompressedBytes));
-                    Command cmd = CommandUtil.jsonToCommand(value);
-                    if (cmd instanceof SetCommand) {
-                        return ((SetCommand) cmd).getValue();
-                    } else if (cmd instanceof RmCommand) {
-                        return null;
-                    }
+                String filePath = this.genFilePath(i);
+                byte[] commandBytes = RandomAccessFileUtil.readByIndex(filePath, cmdPos.getPos(), cmdPos.getLen());
+                JSONObject value = JSONObject.parseObject(new String(commandBytes));
+                Command cmd = CommandUtil.jsonToCommand(value);
+                if (cmd instanceof SetCommand) {
+                    return ((SetCommand) cmd).getValue();
+                } else if (cmd instanceof RmCommand) {
+                    return null;
                 }
             }
         } catch (Throwable t) {
