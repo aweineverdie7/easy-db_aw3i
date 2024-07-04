@@ -101,6 +101,7 @@ public class RandomAccessFileUtil {
         } catch (Exception e) {
             // 捕获并打印任何发生的异常。
             e.printStackTrace();
+            return null;
         } finally {
             try {
                 // 确保在方法退出时关闭文件。
@@ -112,8 +113,6 @@ public class RandomAccessFileUtil {
                 e.printStackTrace();
             }
         }
-        // 如果发生异常，返回null。
-        return null;
     }
 
 

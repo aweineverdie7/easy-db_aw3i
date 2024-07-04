@@ -8,8 +8,8 @@ import java.util.Random;
 public class LargeDataTest {
 
     private static final int KB = 1024; // 1KB大小
-    private static final int TARGET_SIZE_MB = 100; // 目标数据量为10MB
-    private static final int TOTAL_PAIRS = TARGET_SIZE_MB * KB; // 每对数据大约1KB
+    private static final int TARGET_SIZE_MB = 10; // 目标数据量为10MB
+    private static final int TOTAL_PAIRS = TARGET_SIZE_MB * KB;
 
     public static void main(String[] args) {
         String dataDir = "large_data_test" + File.separator;
@@ -42,7 +42,7 @@ public class LargeDataTest {
         System.out.println("数据写入完成。");
         // 验证get操作
         System.out.println("验证读取操作...");
-        int testKeyIndex = 101027; // 选择中间的一个键进行测试
+        int testKeyIndex = 10101; // 选择中间的一个键进行测试
         String testKey = "key_" + String.format("%05d", testKeyIndex);
         String retrievedValue = store.get(testKey);
         System.out.println("键 '" + testKey + "' 的值为: " + retrievedValue);
