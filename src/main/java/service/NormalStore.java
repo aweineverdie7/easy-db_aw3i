@@ -83,7 +83,6 @@ public class NormalStore implements Store {
      */
     private final int storeThreshold = 3;
     private static final long FILE_SIZE_THRESHOLD = 1024 * 1024 * 1; // 1MB
-    private final Lock mergeLock = new ReentrantLock();
     private final int MERGE_THRESHOLD = 5; // 假设当rotate次数达到5次时，进行
 
     public NormalStore(String dataDir) {
@@ -104,7 +103,7 @@ public class NormalStore implements Store {
             try {
                 while (true) {
                     mergeAndCompressFiles();
-                    Thread.sleep(1); // 每隔60秒执行一次合并和压缩操作
+                    Thread.sleep(60); // 每隔60秒执行一次合并和压缩操作
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

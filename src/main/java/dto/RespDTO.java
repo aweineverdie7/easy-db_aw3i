@@ -9,6 +9,7 @@ package dto;
 
 import lombok.Getter;
 import lombok.Setter;
+import com.alibaba.fastjson.JSON;
 
 import java.io.Serializable;
 
@@ -29,5 +30,9 @@ public class RespDTO implements Serializable {
                 "status=" + status +
                 ", value='" + value + '\'' +
                 '}';
+    }
+
+    public String toJson() {
+        return JSON.toJSONString(this);
     }
 }
