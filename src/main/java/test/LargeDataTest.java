@@ -8,7 +8,7 @@ import java.util.Random;
 public class LargeDataTest {
 
     private static final int KB = 1024; // 1KB大小
-    private static final int TARGET_SIZE_MB = 10; // 目标数据量为10MB
+    private static final int TARGET_SIZE_MB = 100; // 目标数据量为10MB
     private static final int TOTAL_PAIRS = TARGET_SIZE_MB * KB;
 
     public static void main(String[] args) {

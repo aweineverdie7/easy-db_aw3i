@@ -103,7 +103,7 @@ public class NormalStore implements Store {
             try {
                 while (true) {
                     mergeAndCompressFiles();
-                    Thread.sleep(60); // 每隔60秒执行一次合并和压缩操作
+                    Thread.sleep(1); // 每隔60秒执行一次合并和压缩操作
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -178,6 +178,7 @@ public void reloadIndex() {
                     start += cmdLen;
                 }
                 file.seek(file.length());
+                file.close();
             }
         }
     } catch (Exception e) {
@@ -233,7 +234,7 @@ public void reloadIndex() {
             //TODO:异步压缩文件，将table文件去重
             executorService.submit(() -> {
                 try {
-//                mergeAndCompressFiles();
+   //             mergeAndCompressFiles();
                     compressFile(rotatedFilePath);
                 } catch (IOException e) {
                     throw new RuntimeException(e);
@@ -241,9 +242,11 @@ public void reloadIndex() {
             });
 //            LOGGER.info("File rotation completed.");
         } catch (IOException e) {
+            e.printStackTrace();
 //            LOGGER.error("File rotation failed.", e);
             // 异常处理
         } finally {
+            this.writerReader.close();
             rotateLock.unlock();
         }
 
@@ -321,8 +324,8 @@ private void mergeAndCompressFiles() throws IOException {
             }
         }
 
-        if (numberedTableFiles.isEmpty() || numberedTableFiles.size() <= MERGE_THRESHOLD) {
-            return; // 如果符合条件的文件数量小于等于合并阈值，则无需合并
+        if (numberedTableFiles.isEmpty() || numberedTableFiles.size() < MERGE_THRESHOLD) {
+            return; // 如果符合条件的文件数量小于合并阈值，则无需合并
         }
 
         // 对文件按修改时间升序排序，最早的文件优先合并
@@ -334,7 +337,6 @@ private void mergeAndCompressFiles() throws IOException {
 
         // 遍历需要合并的文件
         for (File file : numberedTableFiles) {
-            if (mergedCommands.size() >= MERGE_THRESHOLD) break; // 达到合并文件数上限，停止读取更多文件
 
             try (RandomAccessFile raf = new RandomAccessFile(file, "r")) {
                 byte[] lengthBytes = new byte[4];
@@ -422,13 +424,14 @@ private void mergeAndCompressFiles() throws IOException {
      */
     @Override
     public void set(String key, String value) {
+        // 加锁
+        indexLock.writeLock().lock();
         try {
             // 创建SetCommand对象，用于封装设置操作的键值对信息。
             SetCommand command = new SetCommand(key, value);
 
             // 获取写锁，以确保并发操作时的线程安全。
-            // 加锁
-            indexLock.writeLock().lock();
+
                 // 在文件中写入命令的长度，用于后续读取时定位命令位置。
                 // TODO://先写内存表，内存表达到一定阀值再写进磁盘
                 // 先更新内存表
