@@ -10,7 +10,7 @@ public class DataService {
     private NormalStore store;
     public DataService() {
         String dataDir = "severlet" + File.separator;
-        NormalStore store = new NormalStore(dataDir);
+        store = new NormalStore(dataDir);
     }
 
 

@@ -485,9 +485,6 @@ private void mergeAndCompressFiles() throws IOException {
                 }
                 //对当前活跃的data.table文件的直接访问逻辑
                 CommandPos cmdPos = index.get(key);
-                if(key.equals("key_10101")){
-                    System.out.println("key_10101的命令为"+cmdPos);
-                }
                 try {
                         // 使用获取到的文件长度作为读取长度，从位置0开始读取
                         byte[] commandBytes = RandomAccessFileUtil.readByIndex(cmdPos.getGen(), cmdPos.getPos(), cmdPos.getLen());
