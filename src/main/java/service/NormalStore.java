@@ -103,6 +103,7 @@ public class NormalStore implements Store {
             try {
                 while (true) {
                     mergeAndCompressFiles();
+                    this.reloadIndex();
                     Thread.sleep(1); // 每隔60秒执行一次合并和压缩操作
                 }
             } catch (InterruptedException e) {
@@ -172,7 +173,7 @@ public void reloadIndex() {
                     Command command = CommandUtil.jsonToCommand(value);
                     start += 4;
                     if (command != null) {
-                        CommandPos cmdPos = new CommandPos((int) start, cmdLen);
+                        CommandPos cmdPos = new CommandPos((int) start, cmdLen,filePath);
                         index.put(command.getKey(), cmdPos);
                     }
                     start += cmdLen;
@@ -236,6 +237,7 @@ public void reloadIndex() {
                 try {
    //             mergeAndCompressFiles();
                     compressFile(rotatedFilePath);
+                    this.reloadIndex();
                 } catch (IOException e) {
                     throw new RuntimeException(e);
                 }
@@ -246,7 +248,9 @@ public void reloadIndex() {
 //            LOGGER.error("File rotation failed.", e);
             // 异常处理
         } finally {
-            this.writerReader.close();
+            if (this.writerReader != null) {
+                this.writerReader.close();
+            }
             rotateLock.unlock();
         }
 
@@ -291,9 +295,9 @@ public void reloadIndex() {
                 tempFile.writeInt(commandBytes.length);
                 tempFile.write(commandBytes);
             }
-
             // 关闭临时文件
             tempFile.close();
+
 
             // 替换原始文件为压缩后的文件
             Files.move(Paths.get(tempFilePath), Paths.get(filePath), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
@@ -301,6 +305,7 @@ public void reloadIndex() {
         catch (IOException e) {
             throw new RuntimeException(e);
         } finally {
+
         }
     }
 
@@ -402,7 +407,7 @@ private void mergeAndCompressFiles() throws IOException {
             RandomAccessFileUtil.writeInt(this.getCurrentFilePath(), commandBytes.length);
             // 写入命令字节码到磁盘，并记录写入的位置信息
             long pos = RandomAccessFileUtil.write(this.getCurrentFilePath(), commandBytes);
-            CommandPos cmdPos = new CommandPos(pos, commandBytes.length);
+            CommandPos cmdPos = new CommandPos(pos, commandBytes.length,this.getCurrentFilePath());
             // 将命令的位置信息添加到索引中
             this.index.put(entry.getKey(), cmdPos);
         }
@@ -470,6 +475,7 @@ private void mergeAndCompressFiles() throws IOException {
                 if (cachedCommand == null) {
                     cachedCommand = immutable.get(key);
                 }
+
                 if (cachedCommand != null) {
                     if (cachedCommand instanceof SetCommand) {
                         return ((SetCommand) cachedCommand).getValue();
@@ -477,33 +483,22 @@ private void mergeAndCompressFiles() throws IOException {
                         return null;
                     }
                 }
-                this.reloadIndex();
                 //对当前活跃的data.table文件的直接访问逻辑
                 CommandPos cmdPos = index.get(key);
+                if(key.equals("key_10101")){
+                    System.out.println("key_10101的命令为"+cmdPos);
+                }
                 try {
-                    File dataDirFile = new File(dataDir);
-                    File[] tableFiles = dataDirFile.listFiles((dir, name) -> name.startsWith(NAME) && name.endsWith(TABLE));
-
-                    if (tableFiles == null) {
-                        return null;
-                    }
-
-                    // 筛选出带有明确序号的文件
-                    for (File file : tableFiles) {
-                        String filePath = file.getAbsolutePath();
-                        if(filePath.endsWith(TABLE)) {
-                            // 使用获取到的文件长度作为读取长度，从位置0开始读取
-                            if (cmdPos == null) continue;
-                            byte[] commandBytes = RandomAccessFileUtil.readByIndex(filePath, cmdPos.getPos(), cmdPos.getLen());
-                            JSONObject value = JSONObject.parseObject(new String(commandBytes));
-                            Command cmd = CommandUtil.jsonToCommand(value);
-                            if (cmd instanceof SetCommand) {
-                                return ((SetCommand) cmd).getValue();
-                            } else if (cmd instanceof RmCommand) {
-                                return null;
-                            }
+                        // 使用获取到的文件长度作为读取长度，从位置0开始读取
+                        byte[] commandBytes = RandomAccessFileUtil.readByIndex(cmdPos.getGen(), cmdPos.getPos(), cmdPos.getLen());
+                        JSONObject value = JSONObject.parseObject(new String(commandBytes));
+                        Command cmd = CommandUtil.jsonToCommand(value);
+                        if (cmd instanceof SetCommand) {
+                            return ((SetCommand) cmd).getValue();
+                        } else if (cmd instanceof RmCommand) {
+                            return null;
                         }
-                    }
+
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
